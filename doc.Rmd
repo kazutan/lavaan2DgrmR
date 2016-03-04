@@ -1,0 +1,170 @@
+---
+title: "lavaan2DgrmRの試み"
+subtitle: "Harukara.R"
+author: "前田和寛"
+date: "2016年3月4日"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## lavaanパッケージ
+
+lavaanパッケージは、Rで共分散構造分析(structual equation modeling)を実行するパッケージです。公式サイトは以下の通りです:
+
+[](http://lavaan.ugent.be/)
+
+公式サイトにある確認的因子分析とSEMを実行すると、以下のとおりとなる:
+
+```{r}
+library(lavaan)
+
+xx <- HolzingerSwineford1939
+
+HS_model <- '
+visual =~ x1 + x2 + x3
+textual =~ x4 + x5 + x6
+speed =~ x7 + x8 + x9
+'
+
+fit <- cfa(HS_model, data=xx)
+summary(fit)
+
+model2 <- '
+  # measurement model
+    ind60 =~ x1 + x2 + x3
+    dem60 =~ y1 + y2 + y3 + y4
+    dem65 =~ y5 + y6 + y7 + y8
+  # regressions
+    dem60 ~ ind60
+    dem65 ~ ind60 + dem60
+  # residual correlations
+    y1 ~~ y5
+    y2 ~~ y4 + y6
+    y3 ~~ y7
+    y4 ~~ y8
+    y6 ~~ y8
+'
+fit2 <- sem(model2, data=PoliticalDemocracy)
+summary(fit2)
+```
+
+SEMでの結果は、多くの場合ダイアグラムで図示することが多いけれど、このlavaanパッケージはplotを自動的には出力しません。
+
+## DiagrammeRパッケージ
+Rでダイアグラムを描くパッケージです。公式サイトは以下のとおりです:
+
+[](http://rich-iannone.github.io/DiagrammeR/index.html)
+
+公式サイトにあるサンプルコードを実行すると、以下のとおりです:
+
+```{r}
+library(DiagrammeR)
+# Create a node data frame
+nodes <-
+  create_nodes(
+    nodes = c("a", "b", "c", "d"),
+    label = FALSE,
+    type = "lower",
+    style = "filled",
+    color = "aqua",
+    shape = c("circle", "circle",
+              "rectangle", "rectangle"),
+    data = c(3.5, 2.6, 9.4, 2.7)
+  )
+
+edges <-
+  create_edges(
+    from = c("a", "b", "c"),
+    to = c("d", "c", "a"),
+    rel = "leading_to"
+  )
+
+graph <-
+  create_graph(
+    nodes_df = nodes,
+    edges_df = edges,
+    node_attrs = "fontname = Helvetica",
+    edge_attrs = c("color = blue",
+                   "arrowsize = 2")
+  )
+
+render_graph(graph)
+```
+
+## lavaan2DgmR開発の試み
+この2つを利用し、lavaanの出力オブジェクトを自動的にDiagrammeRのgraphオブジェクトを生成する関数を作成しました。
+
+```{r}
+create_graph_lavaan <- function(fit, ...) {
+  library(Hmisc) #順番注意
+  library(DiagrammeR)
+  library(dplyr)
+  
+  # 必要データ取り出し
+  d <- data.frame(fit@ParTable) %>% 
+    select(lhs,op,rhs,est)
+  #こっちもありかも
+  #こっちを使うなら、推定値だけじゃなくてp値も持ってこれるので、
+  #アスタリスクを自動で付けたりとかできるようになる
+  #library(lavaan)
+  #d <- fit %>% parameterEstimates() %>% 
+  #  select(lhs,op,rhs,est)
+  
+  # make NDF
+  latent <- d %>%
+    filter(op == "=~") %>%
+    select(nodes = lhs) %>%
+    distinct %>%
+    mutate(shape = "circle", rank = "same")
+  observed <- d %>% 
+    filter(op != "~1", lhs %nin% latent$nodes) %>%
+    select(nodes = lhs) %>%
+    distinct %>%
+    mutate(shape = "square")
+  nodes_df <- combine_nodes(latent, observed)
+  # make EDF
+  all_paths <- d %>%
+    filter(op != "~1") %>%
+    mutate(label = format(round(est, 2),nsmall=2)) %>%
+    select(-est)
+  loadings <- all_paths %>%
+    filter(op == "=~") %>%
+    mutate(from = lhs, to = rhs, style = "dashed") %>%
+    select(from, to, style, label)
+  regressions <- all_paths %>%
+    filter(op == "~~") %>%
+    mutate(to = lhs, from = rhs, style = "solid", dir = "both") %>%
+    select(from, to, style, label, dir)
+  predictions <- all_paths %>% 
+    filter(op == "~") %>% 
+    mutate(from = lhs, to = rhs, style = "solid") %>% 
+    select(from, to, style)
+  edges_df <- combine_edges(loadings, regressions, predictions)
+  
+  graph <- create_graph(
+    nodes_df = nodes_df,
+    edges_df = edges_df,
+    graph_attrs = c("layout = 'dot'")
+  )
+  return(graph)
+}
+```
+
+先のlavaanで実行した`fit`と`fit2`を実際に実行すると、以下のとおりです:
+
+```{r}
+DgmR1 <- create_graph_lavaan(fit)
+DgmR2 <- create_graph_lavaan(fit2)
+
+render_graph(DgmR1)
+render_graph(DgmR2)
+```
+
+## 課題
+現在の状態では配置に問題があるため、改善が必要となります。またCFAと普通のSEMにしか対応していないので、他母集団SEMに対しても対応させたい。
+
+以上です。
+
